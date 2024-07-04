@@ -1,10 +1,8 @@
 import fs from "fs";
 import { Fill, Order } from "./Orderbook";
 import { RedisManager } from "../RedisManager";
-
 export const BASE_CURRENCY = "INR";
 import { ORDER_UPDATE, TRADE_ADDED } from "../types/index";
-
 import { Orderbook } from "./Orderbook";
 import { CANCEL_ORDER, CREATE_ORDER, GET_DEPTH, GET_OPEN_ORDERS, MessageFromApi, ON_RAMP } from "../types/fromApi"; 
 
@@ -378,6 +376,56 @@ export class Engine {
 
       //@ts-ignore
       this.balances.get(userId)[baseAsset].locked = this.balances.get(userId)?.[baseAsset].locked + Number(quantity);
+    }
+  }
+
+  publishWsTrades(fills: Fill[], userId: string, market: string) {
+    fills.forEach(fill => {
+      RedisManager.getInstance().publishMessage(`trade@${market}`, {
+        stream: `trade@${market}`,
+        data: {
+          e: "trade",
+          t: fill.tradeId,
+          m: fill.otherUserId === userId, // TODO: Is this right?
+          p: fill.price,
+          q: fill.qty.toString(),
+          s: market,
+        }
+      });
+    });
+  }
+
+  publisWsDepthUpdates(fills: Fill[], price: string, side: "buy" | "sell", market: string) {
+    const orderbook = this.orderBooks.find(o => o.ticker() === market);
+    if (!orderbook) {
+      return;
+    }
+    const depth = orderbook.getDepth();
+    if (side === "buy") {
+      const updatedAsks = depth?.asks.filter(x => fills.map(f => f.price).includes(x[0].toString()));
+      const updatedBid = depth?.bids.find(x => x[0] === price);
+      console.log("publish ws depth updates")
+      RedisManager.getInstance().publishMessage(`depth@${market}`, {
+        stream: `depth@${market}`,
+        data: {
+          a: updatedAsks,
+          b: updatedBid ? [updatedBid] : [],
+          e: "depth"
+        }
+      });
+    }
+    if (side === "sell") {
+      const updatedBids = depth?.bids.filter(x => fills.map(f => f.price).includes(x[0].toString()));
+      const updatedAsk = depth?.asks.find(x => x[0] === price);
+      console.log("publish ws depth updates")
+      RedisManager.getInstance().publishMessage(`depth@${market}`, {
+        stream: `depth@${market}`,
+        data: {
+          a: updatedAsk ? [updatedAsk] : [],
+          b: updatedBids,
+          e: "depth"
+        }
+      });
     }
   }
 }
